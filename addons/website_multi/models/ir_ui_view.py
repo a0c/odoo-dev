@@ -1,7 +1,12 @@
+import logging
 from lxml import etree
 
 from openerp import tools
 from openerp.osv import osv, fields
+from openerp.tools.parse_version import parse_version
+from openerp.tools.view_validation import valid_view
+
+_logger = logging.getLogger(__name__)
 
 
 class view(osv.osv):
@@ -71,11 +76,45 @@ class view(osv.osv):
         
     def get_inheriting_views_arch(self, cr, uid, view_id, model, context=None):
         arch = super(view, self).get_inheriting_views_arch(cr, uid, view_id, model, context=context)
-        view_arch = dict([(v, a) for a, v in arch])
+        to_skip = set()
         if context and 'website_id' in context:
-            for view_rec in self.browse(cr, 1, view_arch.keys(), context):
+            for view_rec in self.browse(cr, 1, [v for a, v in arch], context):
                 if view_rec.website_id and view_rec.website_id.id != context['website_id']:
-                    view_arch.pop(view_rec.id)
-        return [(arch, view_id) for view_id, arch in view_arch.items()]
-        
-            
+                    to_skip.add(view_rec.id)
+        return filter(lambda (a, v): v not in to_skip, arch)
+
+    def _check_xml(self, cr, uid, ids, context=None):
+        if context is None:
+            context = {}
+        context = dict(context, check_view_ids=ids)
+
+        # Sanity checks: the view should not break anything upon rendering!
+        # Any exception raised below will cause a transaction rollback.
+        for view in self.browse(cr, uid, ids, context):
+            if view.website_id:
+                context['website_id'] = view.website_id.id
+            view_def = self.read_combined(cr, uid, view.id, ['arch'], context=context)
+            view_arch_utf8 = view_def['arch']
+            if view.type != 'qweb':
+                view_doc = etree.fromstring(view_arch_utf8)
+                # verify that all fields used are valid, etc.
+                self.postprocess_and_fields(cr, uid, view.model, view_doc, view.id, context=context)
+                # RNG-based validation is not possible anymore with 7.0 forms
+                view_docs = [view_doc]
+                if view_docs[0].tag == 'data':
+                    # A <data> element is a wrapper for multiple root nodes
+                    view_docs = view_docs[0]
+                validator = self._relaxng()
+                for view_arch in view_docs:
+                    version = view_arch.get('version', '7.0')
+                    if parse_version(version) < parse_version('7.0') and validator and not validator.validate(view_arch):
+                        for error in validator.error_log:
+                            _logger.error(tools.ustr(error))
+                        return False
+                    if not valid_view(view_arch):
+                        return False
+        return True
+
+    _constraints = [
+        (_check_xml, 'Invalid view definition', ['arch']),
+    ]
