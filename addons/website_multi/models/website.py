@@ -114,6 +114,13 @@ class ir_http(osv.AbstractModel):
             if request.website and request.website.user_id:
                 request.uid = request.website.user_id.id
             else:
+                domain_name = request.httprequest.host
+                website_id = self.pool['website']._get_current_website_id(request.cr, SUPERUSER_ID, domain_name)
+                if website_id:
+                    uid = self.pool['website'].read(request.cr, SUPERUSER_ID, website_id, ['user_id'], load='_classic_write')['user_id']
+                    if uid:
+                        request.uid = uid
+                        return
                 dummy, request.uid = self.pool['ir.model.data'].get_object_reference(request.cr, openerp.SUPERUSER_ID, 'base', 'public_user')
         else:
             request.uid = request.session.uid
