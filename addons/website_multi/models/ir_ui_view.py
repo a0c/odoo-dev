@@ -78,9 +78,10 @@ class view(osv.osv):
         arch = super(view, self).get_inheriting_views_arch(cr, uid, view_id, model, context=context)
         to_skip = set()
         if context and 'website_id' in context:
-            for view_rec in self.browse(cr, 1, [v for a, v in arch], context):
-                if view_rec.website_id and view_rec.website_id.id != context['website_id']:
-                    to_skip.add(view_rec.id)
+            to_skip = {view_rec.id for view_rec in self.browse(cr, 1, [v for a, v in arch], context)
+                       if view_rec.website_id and view_rec.website_id.id != context['website_id']}
+        elif context and 'website_id' not in context:
+            to_skip = {view_rec.id for view_rec in self.browse(cr, 1, [v for a, v in arch], context) if view_rec.website_id}
         return filter(lambda (a, v): v not in to_skip, arch)
 
     def _check_xml(self, cr, uid, ids, context=None):
